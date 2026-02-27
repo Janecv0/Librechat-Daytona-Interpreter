@@ -173,6 +173,8 @@ class DaytonaGateway:
             stdout = result_text
         if stderr is None:
             stderr = ""
+        if (stdout is None or stdout == "") and isinstance(output, str):
+            stdout = output
         if output is None:
             output = stdout if stdout is not None else result_text
         if status is None:

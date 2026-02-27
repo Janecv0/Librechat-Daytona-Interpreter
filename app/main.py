@@ -92,6 +92,10 @@ def _normalize_run_payload(run_payload: Any) -> RunResult:
     stderr = run_payload.get("stderr")
     status = run_payload.get("status")
     output = run_payload.get("output")
+    if (stdout is None or stdout == "") and isinstance(output, str):
+        stdout = output
+    if output is None and isinstance(stdout, str):
+        output = stdout
 
     return RunResult(
         stdout=str(stdout) if stdout is not None else "",
