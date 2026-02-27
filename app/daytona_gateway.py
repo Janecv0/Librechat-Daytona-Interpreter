@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from importlib import import_module
 from io import BytesIO
 from pathlib import PurePosixPath
+import json
 from typing import Any
 
 from .file_ids import normalize_workspace_path
@@ -65,6 +66,37 @@ class DaytonaGateway:
         if last_error is None:
             raise RuntimeError("No call variants were available.")
         raise last_error
+
+    @classmethod
+    def _to_text(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="replace")
+        if isinstance(value, (int, float, bool)):
+            return str(value)
+        if isinstance(value, list):
+            parts = [cls._to_text(item) for item in value]
+            non_empty = [part for part in parts if part]
+            if non_empty:
+                return "\n".join(non_empty)
+            return json.dumps(value, ensure_ascii=False, default=str)
+        if isinstance(value, dict):
+            for key in ("stdout", "output", "result", "text", "message", "content"):
+                if key in value:
+                    nested = cls._to_text(value.get(key))
+                    if nested:
+                        return nested
+            return json.dumps(value, ensure_ascii=False, default=str)
+
+        for key in ("stdout", "output", "result", "text", "message", "content"):
+            if hasattr(value, key):
+                nested = cls._to_text(getattr(value, key))
+                if nested:
+                    return nested
+        return str(value)
 
     def _get_sandbox(self, sandbox_id: str) -> Any:
         getter = getattr(self._client, "get", None)
@@ -163,26 +195,37 @@ class DaytonaGateway:
         stdout = self._field(result, ("stdout", "out", "standard_output", "standardOutput"))
         stderr = self._field(result, ("stderr", "err", "standard_error", "standardError"))
         result_text = self._field(result, ("result",))
+        artifacts = self._field(result, ("artifacts",))
         exit_code = self._field(result, ("code", "exit_code", "exitCode", "return_code", "returnCode"))
-        status = self._field(result, ("status", "state", "result"))
+        status = self._field(result, ("status", "state"))
         output = self._field(result, ("output",))
 
         if isinstance(exit_code, str) and exit_code.lstrip("-").isdigit():
             exit_code = int(exit_code)
-        if stdout is None and isinstance(result_text, str):
-            stdout = result_text
-        if stderr is None:
-            stderr = ""
-        if (stdout is None or stdout == "") and isinstance(output, str):
-            stdout = output
+
+        stdout_text = self._to_text(stdout) or ""
+        stderr_text = self._to_text(stderr) or ""
+        result_output_text = self._to_text(result_text) or ""
+        artifacts_stdout_text = self._to_text(self._field(artifacts, ("stdout", "output", "result")))
+        output_text = self._to_text(output) or ""
+
+        if not stdout_text and result_output_text:
+            stdout_text = result_output_text
+        if not stdout_text and output_text:
+            stdout_text = output_text
+        if not stdout_text and artifacts_stdout_text:
+            stdout_text = artifacts_stdout_text
+
+        if not output_text and stdout_text:
+            output_text = stdout_text
         if output is None:
-            output = stdout if stdout is not None else result_text
+            output = output_text
         if status is None:
             status = "completed" if exit_code in (None, 0) else "failed"
 
         return {
-            "stdout": str(stdout) if stdout is not None else "",
-            "stderr": str(stderr),
+            "stdout": stdout_text,
+            "stderr": stderr_text,
             "code": exit_code if isinstance(exit_code, int) or exit_code is None else None,
             "status": str(status),
             "output": output,

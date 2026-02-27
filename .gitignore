@@ -15,6 +15,7 @@ venv/
 .coverage
 coverage.xml
 htmlcov/
+.tmp_pkg/
 
 # Environment and local config
 .env
@@ -29,4 +30,3 @@ htmlcov/
 # OS files
 .DS_Store
 Thumbs.db
-

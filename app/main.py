@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 import logging
 from contextlib import asynccontextmanager
 from io import BytesIO
@@ -92,17 +93,21 @@ def _normalize_run_payload(run_payload: Any) -> RunResult:
     stderr = run_payload.get("stderr")
     status = run_payload.get("status")
     output = run_payload.get("output")
-    if (stdout is None or stdout == "") and isinstance(output, str):
-        stdout = output
-    if output is None and isinstance(stdout, str):
-        output = stdout
+    stdout_text = _coerce_text(stdout) or ""
+    stderr_text = _coerce_text(stderr) or ""
+    output_text = _coerce_text(output) or ""
+
+    if not stdout_text and output_text:
+        stdout_text = output_text
+    if output is None and stdout_text:
+        output = stdout_text
 
     return RunResult(
-        stdout=str(stdout) if stdout is not None else "",
-        stderr=str(stderr) if stderr is not None else "",
+        stdout=stdout_text,
+        stderr=stderr_text,
         code=code,
         status=str(status) if status is not None else ("completed" if code in (None, 0) else "failed"),
-        output=output if output is not None else (stdout if stdout is not None else ""),
+        output=output if output is not None else stdout_text,
     )
 
 
@@ -136,6 +141,36 @@ async def _read_upload_bytes(upload: UploadFile, max_bytes: int) -> bytes:
 
 def _daytona_error(action: str, exc: Exception) -> APIError:
     return APIError(status_code=502, code="daytona_error", message=f"Failed to {action}: {exc}")
+
+
+def _coerce_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    if isinstance(value, list):
+        parts = [_coerce_text(item) for item in value]
+        non_empty = [part for part in parts if part]
+        if non_empty:
+            return "\n".join(non_empty)
+        return json.dumps(value, ensure_ascii=False, default=str)
+    if isinstance(value, dict):
+        for key in ("stdout", "output", "result", "text", "message", "content"):
+            if key in value:
+                nested = _coerce_text(value.get(key))
+                if nested:
+                    return nested
+        return json.dumps(value, ensure_ascii=False, default=str)
+    for key in ("stdout", "output", "result", "text", "message", "content"):
+        if hasattr(value, key):
+            nested = _coerce_text(getattr(value, key))
+            if nested:
+                return nested
+    return str(value)
 
 
 def _is_missing_workspace_error(exc: Exception) -> bool:
