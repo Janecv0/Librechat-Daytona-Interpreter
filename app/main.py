@@ -134,6 +134,27 @@ def _daytona_error(action: str, exc: Exception) -> APIError:
     return APIError(status_code=502, code="daytona_error", message=f"Failed to {action}: {exc}")
 
 
+def _is_missing_workspace_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    missing_signals = ("not found", "does not exist", "no such file", "file not found")
+    return "workspace" in message and any(signal in message for signal in missing_signals)
+
+
+def _safe_list_workspace_files(gateway_client: Any, sandbox_id: str) -> list[Any]:
+    try:
+        return gateway_client.list_files(sandbox_id, WORKSPACE_ROOT)
+    except Exception as exc:
+        # Code execution should not fail solely because listing /workspace failed.
+        if _is_missing_workspace_error(exc):
+            logger.warning(
+                "Workspace path '%s' is unavailable in sandbox '%s'. Returning empty files list.",
+                WORKSPACE_ROOT,
+                sandbox_id,
+            )
+            return []
+        raise
+
+
 def create_app(
     settings: Settings | None = None,
     store: SessionStore | None = None,
@@ -242,11 +263,15 @@ def create_app(
 
         try:
             run_payload = gateway_client.run_code(session.sandbox_id, language, payload.code)
-            file_entries = gateway_client.list_files(session.sandbox_id, WORKSPACE_ROOT)
         except APIError:
             raise
         except Exception as exc:
             raise _daytona_error("execute code in Daytona sandbox", exc) from exc
+
+        try:
+            file_entries = _safe_list_workspace_files(gateway_client, session.sandbox_id)
+        except Exception as exc:
+            raise _daytona_error("list files", exc) from exc
 
         file_descriptors = [_to_file_descriptor(item) for item in file_entries]
         return ExecResponse(
@@ -310,7 +335,7 @@ def create_app(
         gateway_client = ensure_gateway()
         session = await service.require_session(session_id)
         try:
-            file_entries = gateway_client.list_files(session.sandbox_id, WORKSPACE_ROOT)
+            file_entries = _safe_list_workspace_files(gateway_client, session.sandbox_id)
         except Exception as exc:
             raise _daytona_error("list files", exc) from exc
         return FilesResponse(session_id=session.session_id, files=[_to_file_descriptor(item) for item in file_entries])
@@ -329,7 +354,7 @@ def create_app(
         session = await service.require_session(session_id)
         target_path = resolve_file_reference(file_id)
         try:
-            file_entries = gateway_client.list_files(session.sandbox_id, WORKSPACE_ROOT)
+            file_entries = _safe_list_workspace_files(gateway_client, session.sandbox_id)
             descriptors = [_to_file_descriptor(item) for item in file_entries]
         except Exception as exc:
             raise _daytona_error("list files", exc) from exc
@@ -370,7 +395,7 @@ def create_app(
         session = await service.require_session(session_id)
         target_path = resolve_file_reference(file_id)
         try:
-            file_entries = gateway_client.list_files(session.sandbox_id, WORKSPACE_ROOT)
+            file_entries = _safe_list_workspace_files(gateway_client, session.sandbox_id)
             descriptors = [_to_file_descriptor(item) for item in file_entries]
         except Exception as exc:
             raise _daytona_error("list files", exc) from exc
