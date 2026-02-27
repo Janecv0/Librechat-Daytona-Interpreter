@@ -96,6 +96,10 @@ class DaytonaGateway:
                 nested = cls._to_text(getattr(value, key))
                 if nested:
                     return nested
+        if hasattr(value, "additional_properties"):
+            nested = cls._to_text(getattr(value, "additional_properties"))
+            if nested:
+                return nested
         return str(value)
 
     def _get_sandbox(self, sandbox_id: str) -> Any:
@@ -168,6 +172,37 @@ class DaytonaGateway:
 
     def run_code(self, sandbox_id: str, language: str, code: str) -> dict[str, Any]:
         sandbox = self._get_sandbox(sandbox_id)
+        if language == "python":
+            interpreter = getattr(sandbox, "code_interpreter", None) or getattr(sandbox, "codeInterpreter", None)
+            if interpreter is not None:
+                run_interpreter = getattr(interpreter, "run_code", None) or getattr(interpreter, "runCode", None)
+                if callable(run_interpreter):
+                    try:
+                        result = self._call_with_variants(
+                            run_interpreter,
+                            [((code,), {}), ((), {"code": code})],
+                        )
+                        stdout_text = self._to_text(self._field(result, ("stdout", "output", "result"))) or ""
+                        stderr_text = self._to_text(self._field(result, ("stderr",))) or ""
+                        error_value = self._field(result, ("error",))
+                        error_text = self._to_text(error_value)
+                        if error_text:
+                            stderr_text = f"{stderr_text}\n{error_text}".strip()
+                        success = not bool(error_value)
+                        exit_code = 0 if success else 1
+                        status = "completed" if success else "failed"
+                        output = stdout_text if stdout_text else stderr_text
+                        return {
+                            "stdout": stdout_text,
+                            "stderr": stderr_text,
+                            "code": exit_code,
+                            "status": status,
+                            "output": output,
+                        }
+                    except Exception:
+                        # Fall back to process.code_run mapping below.
+                        pass
+
         process = getattr(sandbox, "process", None)
         if process is None:
             raise RuntimeError("Sandbox does not expose process API.")
@@ -215,6 +250,11 @@ class DaytonaGateway:
             stdout_text = output_text
         if not stdout_text and artifacts_stdout_text:
             stdout_text = artifacts_stdout_text
+        if not stdout_text:
+            # Last-resort fallback for SDK responses where output is only present in nested metadata.
+            result_fallback_text = self._to_text(result)
+            if result_fallback_text and result_fallback_text not in {"{}", "[]"}:
+                stdout_text = result_fallback_text
 
         if not output_text and stdout_text:
             output_text = stdout_text
