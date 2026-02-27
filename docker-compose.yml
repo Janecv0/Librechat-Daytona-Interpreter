@@ -1,0 +1,26 @@
+services:
+  adapter:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: librechat-daytona-adapter
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: librechat-daytona-redis
+    profiles:
+      - redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+
+volumes:
+  redis-data:
+
