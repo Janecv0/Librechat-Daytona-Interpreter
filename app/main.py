@@ -102,12 +102,14 @@ def _normalize_run_payload(run_payload: Any) -> RunResult:
     if output is None and stdout_text:
         output = stdout_text
 
+    normalized_output = _json_safe(output if output is not None else stdout_text)
+
     return RunResult(
         stdout=stdout_text,
         stderr=stderr_text,
         code=code,
         status=str(status) if status is not None else ("completed" if code in (None, 0) else "failed"),
-        output=output if output is not None else stdout_text,
+        output=normalized_output,
     )
 
 
@@ -173,6 +175,31 @@ def _coerce_text(value: Any) -> str | None:
     return str(value)
 
 
+def _json_safe(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if hasattr(value, "model_dump") and callable(getattr(value, "model_dump")):
+        try:
+            return _json_safe(value.model_dump())
+        except Exception:
+            pass
+    if hasattr(value, "dict") and callable(getattr(value, "dict")):
+        try:
+            return _json_safe(value.dict())
+        except Exception:
+            pass
+    text = _coerce_text(value)
+    return text if text is not None else str(value)
+
+
 def _is_missing_workspace_error(exc: Exception) -> bool:
     message = str(exc).lower()
     missing_signals = ("not found", "does not exist", "no such file", "file not found")
@@ -203,6 +230,20 @@ def _best_effort_file_descriptors(entries: list[Any]) -> list[FileDescriptor]:
             logger.warning("Skipping invalid file entry from Daytona: %s", exc)
             continue
     return descriptors
+
+
+def _get_runtime_clients(
+    ensure_session_service: Any,
+    ensure_gateway: Any,
+) -> tuple[SessionService, Any]:
+    try:
+        service = ensure_session_service()
+        gateway_client = ensure_gateway()
+    except APIError:
+        raise
+    except Exception as exc:
+        raise _daytona_error("initialize Daytona client", exc) from exc
+    return service, gateway_client
 
 
 def create_app(
@@ -305,11 +346,15 @@ def create_app(
         payload: ExecRequest,
         _: None = Depends(require_api_key),
     ) -> ExecResponse:
-        service = ensure_session_service()
-        gateway_client = ensure_gateway()
+        service, gateway_client = _get_runtime_clients(ensure_session_service, ensure_gateway)
         language = normalize_language(payload.lang)
         requested_session_id = payload.session_id or _extract_session_id_from_files(payload.files)
-        session = await service.get_or_create_exec_session(requested_session_id, language)
+        try:
+            session = await service.get_or_create_exec_session(requested_session_id, language)
+        except APIError:
+            raise
+        except Exception as exc:
+            raise _daytona_error("create or fetch session", exc) from exc
 
         try:
             run_payload = gateway_client.run_code(session.sandbox_id, language, payload.code)
@@ -345,12 +390,16 @@ def create_app(
         session_id: Annotated[str | None, Form()] = None,
         files: list[UploadFile] = File(...),
     ) -> FilesResponse:
-        service = ensure_session_service()
-        gateway_client = ensure_gateway()
+        service, gateway_client = _get_runtime_clients(ensure_session_service, ensure_gateway)
         if not files:
             raise APIError(status_code=400, code="no_files", message="At least one file is required.")
 
-        session = await service.get_or_create_upload_session(session_id=session_id, default_language="python")
+        try:
+            session = await service.get_or_create_upload_session(session_id=session_id, default_language="python")
+        except APIError:
+            raise
+        except Exception as exc:
+            raise _daytona_error("create or fetch session", exc) from exc
         uploaded_descriptors: list[FileDescriptor] = []
 
         for upload in files:
@@ -386,9 +435,13 @@ def create_app(
         session_id: str,
         _: None = Depends(require_api_key),
     ) -> FilesResponse:
-        service = ensure_session_service()
-        gateway_client = ensure_gateway()
-        session = await service.require_session(session_id)
+        service, gateway_client = _get_runtime_clients(ensure_session_service, ensure_gateway)
+        try:
+            session = await service.require_session(session_id)
+        except APIError:
+            raise
+        except Exception as exc:
+            raise _daytona_error("resolve session", exc) from exc
         try:
             file_entries = _safe_list_workspace_files(gateway_client, session.sandbox_id)
         except Exception as exc:
@@ -404,9 +457,13 @@ def create_app(
         file_id: str,
         _: None = Depends(require_api_key),
     ) -> StreamingResponse:
-        service = ensure_session_service()
-        gateway_client = ensure_gateway()
-        session = await service.require_session(session_id)
+        service, gateway_client = _get_runtime_clients(ensure_session_service, ensure_gateway)
+        try:
+            session = await service.require_session(session_id)
+        except APIError:
+            raise
+        except Exception as exc:
+            raise _daytona_error("resolve session", exc) from exc
         target_path = resolve_file_reference(file_id)
         try:
             file_entries = _safe_list_workspace_files(gateway_client, session.sandbox_id)
@@ -445,9 +502,13 @@ def create_app(
         file_id: str,
         _: None = Depends(require_api_key),
     ) -> DeleteResponse:
-        service = ensure_session_service()
-        gateway_client = ensure_gateway()
-        session = await service.require_session(session_id)
+        service, gateway_client = _get_runtime_clients(ensure_session_service, ensure_gateway)
+        try:
+            session = await service.require_session(session_id)
+        except APIError:
+            raise
+        except Exception as exc:
+            raise _daytona_error("resolve session", exc) from exc
         target_path = resolve_file_reference(file_id)
         try:
             file_entries = _safe_list_workspace_files(gateway_client, session.sandbox_id)
