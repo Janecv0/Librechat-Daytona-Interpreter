@@ -194,6 +194,17 @@ def _safe_list_workspace_files(gateway_client: Any, sandbox_id: str) -> list[Any
         raise
 
 
+def _best_effort_file_descriptors(entries: list[Any]) -> list[FileDescriptor]:
+    descriptors: list[FileDescriptor] = []
+    for entry in entries:
+        try:
+            descriptors.append(_to_file_descriptor(entry))
+        except Exception as exc:
+            logger.warning("Skipping invalid file entry from Daytona: %s", exc)
+            continue
+    return descriptors
+
+
 def create_app(
     settings: Settings | None = None,
     store: SessionStore | None = None,
@@ -310,9 +321,14 @@ def create_app(
         try:
             file_entries = _safe_list_workspace_files(gateway_client, session.sandbox_id)
         except Exception as exc:
-            raise _daytona_error("list files", exc) from exc
+            logger.warning(
+                "Non-fatal Daytona file listing error in /exec for session '%s': %s",
+                session.session_id,
+                exc,
+            )
+            file_entries = []
 
-        file_descriptors = [_to_file_descriptor(item) for item in file_entries]
+        file_descriptors = _best_effort_file_descriptors(file_entries)
         return ExecResponse(
             session_id=session.session_id,
             run=_normalize_run_payload(run_payload),
@@ -377,7 +393,7 @@ def create_app(
             file_entries = _safe_list_workspace_files(gateway_client, session.sandbox_id)
         except Exception as exc:
             raise _daytona_error("list files", exc) from exc
-        return FilesResponse(session_id=session.session_id, files=[_to_file_descriptor(item) for item in file_entries])
+        return FilesResponse(session_id=session.session_id, files=_best_effort_file_descriptors(file_entries))
 
     @app.get(
         "/download/{session_id}/{file_id}",
@@ -394,7 +410,7 @@ def create_app(
         target_path = resolve_file_reference(file_id)
         try:
             file_entries = _safe_list_workspace_files(gateway_client, session.sandbox_id)
-            descriptors = [_to_file_descriptor(item) for item in file_entries]
+            descriptors = _best_effort_file_descriptors(file_entries)
         except Exception as exc:
             raise _daytona_error("list files", exc) from exc
 
@@ -435,7 +451,7 @@ def create_app(
         target_path = resolve_file_reference(file_id)
         try:
             file_entries = _safe_list_workspace_files(gateway_client, session.sandbox_id)
-            descriptors = [_to_file_descriptor(item) for item in file_entries]
+            descriptors = _best_effort_file_descriptors(file_entries)
         except Exception as exc:
             raise _daytona_error("list files", exc) from exc
 
