@@ -20,10 +20,17 @@ class FileEntry:
 
 class DaytonaGateway:
     def __init__(self, api_key: str, api_url: str | None = None) -> None:
+        daytona_module = None
         try:
-            daytona_module = import_module("daytona")
-        except ImportError as exc:  # pragma: no cover - runtime environment concern
-            raise RuntimeError("daytona-sdk package is required.") from exc
+            daytona_module = import_module("daytona_sdk")
+        except ImportError:
+            try:
+                daytona_module = import_module("daytona")
+            except ImportError as exc:  # pragma: no cover - runtime environment concern
+                raise RuntimeError("daytona-sdk package is required.") from exc
+
+        if daytona_module is None:  # pragma: no cover - defensive fallback
+            raise RuntimeError("daytona-sdk package is required.")
 
         self._module = daytona_module
         daytona_cls = getattr(daytona_module, "Daytona")
@@ -82,13 +89,19 @@ class DaytonaGateway:
         if not callable(creator):
             raise RuntimeError("Daytona client does not expose sandbox creation.")
 
-        create_params_cls = getattr(self._module, "CreateSandboxParams", None)
+        create_params_classes = [
+            getattr(self._module, "CreateSandboxFromSnapshotParams", None),
+            getattr(self._module, "CreateSandboxBaseParams", None),
+            getattr(self._module, "CreateSandboxParams", None),
+        ]
         variants: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
-        if create_params_cls is not None:
+        for create_params_cls in create_params_classes:
+            if create_params_cls is None:
+                continue
             for kwargs in ({"language": language}, {"lang": language}):
                 try:
                     variants.append(((create_params_cls(**kwargs),), {}))
-                except TypeError:
+                except (TypeError, ValueError):
                     continue
         variants.extend(
             [
@@ -107,7 +120,11 @@ class DaytonaGateway:
     def delete_sandbox(self, sandbox_id: str) -> None:
         deleter = getattr(self._client, "delete", None)
         if callable(deleter):
-            deleter(sandbox_id)
+            try:
+                sandbox = self._get_sandbox(sandbox_id)
+                deleter(sandbox)
+            except Exception:
+                deleter(sandbox_id)
             return
 
         sandboxes = getattr(self._client, "sandboxes", None)
@@ -143,21 +160,26 @@ class DaytonaGateway:
         )
 
         result = self._call_with_variants(code_run, variants)
-        stdout = self._field(result, ("stdout", "out", "standard_output", "standardOutput")) or ""
-        stderr = self._field(result, ("stderr", "err", "standard_error", "standardError")) or ""
+        stdout = self._field(result, ("stdout", "out", "standard_output", "standardOutput"))
+        stderr = self._field(result, ("stderr", "err", "standard_error", "standardError"))
+        result_text = self._field(result, ("result",))
         exit_code = self._field(result, ("code", "exit_code", "exitCode", "return_code", "returnCode"))
         status = self._field(result, ("status", "state", "result"))
         output = self._field(result, ("output",))
 
         if isinstance(exit_code, str) and exit_code.lstrip("-").isdigit():
             exit_code = int(exit_code)
+        if stdout is None and isinstance(result_text, str):
+            stdout = result_text
+        if stderr is None:
+            stderr = ""
         if output is None:
-            output = stdout
+            output = stdout if stdout is not None else result_text
         if status is None:
             status = "completed" if exit_code in (None, 0) else "failed"
 
         return {
-            "stdout": str(stdout),
+            "stdout": str(stdout) if stdout is not None else "",
             "stderr": str(stderr),
             "code": exit_code if isinstance(exit_code, int) or exit_code is None else None,
             "status": str(status),
@@ -171,6 +193,7 @@ class DaytonaGateway:
         bytes_io = BytesIO(content)
 
         direct_attempts = [
+            ("upload_file", (content, path), {}),
             ("upload_file", (path, content), {}),
             ("upload_file", (), {"path": path, "data": content}),
             ("upload_file", (), {"remote_path": path, "data": content}),
@@ -395,4 +418,3 @@ class DaytonaGateway:
                 continue
 
         raise RuntimeError("Unable to delete file with available Daytona SDK methods.")
-
