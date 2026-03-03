@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     DAYTONA_API_KEY: str
     DAYTONA_API_URL: str | None = None
     REDIS_URL: str | None = None
-    SESSION_TTL_SECONDS: int = 1800
+    SESSION_TTL_SECONDS: int = 6000
     CLEANUP_INTERVAL_SECONDS: int = 60
     UPLOAD_MAX_BYTES: int = 20 * 1024 * 1024
     LOG_LEVEL: str = "INFO"
