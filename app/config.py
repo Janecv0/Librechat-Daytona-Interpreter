@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     SESSION_TTL_SECONDS: int = 1800
     CLEANUP_INTERVAL_SECONDS: int = 60
     UPLOAD_MAX_BYTES: int = 20 * 1024 * 1024
+    LOG_LEVEL: str = "INFO"
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -24,4 +25,3 @@ class Settings(BaseSettings):
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()
-

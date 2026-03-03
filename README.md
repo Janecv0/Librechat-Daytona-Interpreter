@@ -19,6 +19,7 @@ No MCP implementation is included.
 - API key auth via `x-api-key`
 - Session mapping backed by Redis (`REDIS_URL`) or in-memory fallback
 - Idle sandbox cleanup (`SESSION_TTL_SECONDS`)
+- End-to-end hop logging for `LibreChat -> interface -> Daytona -> interface -> LibreChat`
 - Path traversal protection (confined to `/workspace`)
 - Upload size limit (`UPLOAD_MAX_BYTES`, default 20 MB)
 
@@ -33,6 +34,20 @@ Copy `.env.example` to `.env` and set values:
 - `SESSION_TTL_SECONDS` (optional, default `1800`)
 - `UPLOAD_MAX_BYTES` (optional, default `20971520`)
 - `CLEANUP_INTERVAL_SECONDS` (optional, default `60`)
+- `LOG_LEVEL` (optional, default `INFO`)
+
+`REDIS_URL` format must include scheme + credentials + host + port + db:
+
+```env
+REDIS_URL=redis://<username>:<password>@<host>:<port>/<db>
+```
+
+Examples:
+
+```env
+REDIS_URL=redis://default:MyPassword@redis.railway.internal:6379/0
+REDIS_URL=rediss://default:MyPassword@redis.example.com:6379/0
+```
 
 ## Python Version
 

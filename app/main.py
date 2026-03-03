@@ -41,6 +41,23 @@ from .session_store import SessionStore, create_session_store
 logger = logging.getLogger(__name__)
 
 
+def _configure_logging(level_name: str) -> None:
+    level = getattr(logging, level_name.upper(), logging.INFO)
+    root_logger = logging.getLogger()
+    if not root_logger.handlers:
+        logging.basicConfig(
+            level=level,
+            format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        )
+    root_logger.setLevel(level)
+
+
+def _truncate(text: str, max_chars: int = 400) -> str:
+    if len(text) <= max_chars:
+        return text
+    return f"{text[:max_chars]}... [truncated {len(text) - max_chars} chars]"
+
+
 def _get_field(value: Any, keys: tuple[str, ...]) -> Any:
     if isinstance(value, dict):
         for key in keys:
@@ -253,6 +270,7 @@ def create_app(
     enable_cleanup: bool = True,
 ) -> FastAPI:
     runtime_settings = settings or get_settings()
+    _configure_logging(runtime_settings.LOG_LEVEL)
     runtime_store = store or create_session_store(runtime_settings.REDIS_URL)
     runtime_gateway: Any | None = gateway
     session_service: SessionService | None = (
@@ -346,6 +364,13 @@ def create_app(
         payload: ExecRequest,
         _: None = Depends(require_api_key),
     ) -> ExecResponse:
+        logger.info(
+            "LibreChat -> interface /exec session_id=%s lang=%s code_len=%s code_preview=%s",
+            payload.session_id,
+            payload.lang,
+            len(payload.code or ""),
+            _truncate(payload.code or ""),
+        )
         service, gateway_client = _get_runtime_clients(ensure_session_service, ensure_gateway)
         language = normalize_language(payload.lang)
         requested_session_id = payload.session_id or _extract_session_id_from_files(payload.files)
@@ -356,12 +381,27 @@ def create_app(
         except Exception as exc:
             raise _daytona_error("create or fetch session", exc) from exc
 
+        logger.info(
+            "Interface -> Daytona run_code session_id=%s sandbox_id=%s lang=%s",
+            session.session_id,
+            session.sandbox_id,
+            language,
+        )
         try:
             run_payload = gateway_client.run_code(session.sandbox_id, language, payload.code)
         except APIError:
             raise
         except Exception as exc:
             raise _daytona_error("execute code in Daytona sandbox", exc) from exc
+        logger.info(
+            "Daytona -> interface run_code session_id=%s sandbox_id=%s status=%s code=%s stdout_preview=%s stderr_preview=%s",
+            session.session_id,
+            session.sandbox_id,
+            _get_field(run_payload, ("status",)),
+            _get_field(run_payload, ("code",)),
+            _truncate(_coerce_text(_get_field(run_payload, ("stdout", "output", "result"))) or ""),
+            _truncate(_coerce_text(_get_field(run_payload, ("stderr", "error"))) or ""),
+        )
 
         try:
             file_entries = _safe_list_workspace_files(gateway_client, session.sandbox_id)
@@ -374,11 +414,19 @@ def create_app(
             file_entries = []
 
         file_descriptors = _best_effort_file_descriptors(file_entries)
-        return ExecResponse(
+        response = ExecResponse(
             session_id=session.session_id,
             run=_normalize_run_payload(run_payload),
             files=file_descriptors,
         )
+        logger.info(
+            "Interface -> LibreChat /exec session_id=%s status=%s code=%s files=%s",
+            response.session_id,
+            response.run.status,
+            response.run.code,
+            len(response.files),
+        )
+        return response
 
     @app.post(
         "/upload",
@@ -390,6 +438,11 @@ def create_app(
         session_id: Annotated[str | None, Form()] = None,
         files: list[UploadFile] = File(...),
     ) -> FilesResponse:
+        logger.info(
+            "LibreChat -> interface /upload session_id=%s files=%s",
+            session_id,
+            [file.filename for file in files],
+        )
         service, gateway_client = _get_runtime_clients(ensure_session_service, ensure_gateway)
         if not files:
             raise APIError(status_code=400, code="no_files", message="At least one file is required.")
@@ -407,7 +460,21 @@ def create_app(
                 payload = await _read_upload_bytes(upload, runtime_settings.UPLOAD_MAX_BYTES)
                 safe_name = sanitize_upload_filename(upload.filename or "upload.bin")
                 destination_path = normalize_workspace_path(f"{WORKSPACE_ROOT}/{safe_name}")
+                logger.info(
+                    "Interface -> Daytona upload_file session_id=%s sandbox_id=%s path=%s size=%s",
+                    session.session_id,
+                    session.sandbox_id,
+                    destination_path,
+                    len(payload),
+                )
                 gateway_client.upload_file(session.sandbox_id, destination_path, payload)
+                logger.info(
+                    "Daytona -> interface upload_file session_id=%s sandbox_id=%s path=%s size=%s",
+                    session.session_id,
+                    session.sandbox_id,
+                    destination_path,
+                    len(payload),
+                )
                 uploaded_descriptors.append(
                     FileDescriptor(
                         id=encode_file_id(destination_path),
@@ -424,7 +491,13 @@ def create_app(
                 await upload.close()
 
         await service.touch(session.session_id)
-        return FilesResponse(session_id=session.session_id, files=uploaded_descriptors)
+        response = FilesResponse(session_id=session.session_id, files=uploaded_descriptors)
+        logger.info(
+            "Interface -> LibreChat /upload session_id=%s files=%s",
+            response.session_id,
+            len(response.files),
+        )
+        return response
 
     @app.get(
         "/files/{session_id}",
@@ -435,6 +508,7 @@ def create_app(
         session_id: str,
         _: None = Depends(require_api_key),
     ) -> FilesResponse:
+        logger.info("LibreChat -> interface /files session_id=%s", session_id)
         service, gateway_client = _get_runtime_clients(ensure_session_service, ensure_gateway)
         try:
             session = await service.require_session(session_id)
@@ -442,11 +516,15 @@ def create_app(
             raise
         except Exception as exc:
             raise _daytona_error("resolve session", exc) from exc
+        logger.info("Interface -> Daytona list_files session_id=%s sandbox_id=%s", session.session_id, session.sandbox_id)
         try:
             file_entries = _safe_list_workspace_files(gateway_client, session.sandbox_id)
         except Exception as exc:
             raise _daytona_error("list files", exc) from exc
-        return FilesResponse(session_id=session.session_id, files=_best_effort_file_descriptors(file_entries))
+        response = FilesResponse(session_id=session.session_id, files=_best_effort_file_descriptors(file_entries))
+        logger.info("Daytona -> interface list_files session_id=%s count=%s", session.session_id, len(response.files))
+        logger.info("Interface -> LibreChat /files session_id=%s count=%s", response.session_id, len(response.files))
+        return response
 
     @app.get(
         "/download/{session_id}/{file_id}",
@@ -457,6 +535,7 @@ def create_app(
         file_id: str,
         _: None = Depends(require_api_key),
     ) -> StreamingResponse:
+        logger.info("LibreChat -> interface /download session_id=%s file_id=%s", session_id, file_id)
         service, gateway_client = _get_runtime_clients(ensure_session_service, ensure_gateway)
         try:
             session = await service.require_session(session_id)
@@ -465,6 +544,7 @@ def create_app(
         except Exception as exc:
             raise _daytona_error("resolve session", exc) from exc
         target_path = resolve_file_reference(file_id)
+        logger.info("Interface -> Daytona list_files session_id=%s sandbox_id=%s", session.session_id, session.sandbox_id)
         try:
             file_entries = _safe_list_workspace_files(gateway_client, session.sandbox_id)
             descriptors = _best_effort_file_descriptors(file_entries)
@@ -479,6 +559,12 @@ def create_app(
                 message=f"File '{target_path}' does not exist in session '{session_id}'.",
             )
 
+        logger.info(
+            "Interface -> Daytona download_file session_id=%s sandbox_id=%s path=%s",
+            session.session_id,
+            session.sandbox_id,
+            target_path,
+        )
         try:
             payload = gateway_client.download_file(session.sandbox_id, target_path)
         except Exception as exc:
@@ -486,10 +572,23 @@ def create_app(
 
         if not isinstance(payload, bytes):
             raise APIError(status_code=502, code="daytona_error", message="Daytona returned non-bytes file payload.")
+        logger.info(
+            "Daytona -> interface download_file session_id=%s sandbox_id=%s path=%s size=%s",
+            session.session_id,
+            session.sandbox_id,
+            target_path,
+            len(payload),
+        )
 
         descriptor = files_by_path[target_path]
         filename = descriptor.name or PurePosixPath(target_path).name
         headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+        logger.info(
+            "Interface -> LibreChat /download session_id=%s path=%s size=%s",
+            session.session_id,
+            target_path,
+            len(payload),
+        )
         return StreamingResponse(BytesIO(payload), media_type="application/octet-stream", headers=headers)
 
     @app.delete(
@@ -502,6 +601,7 @@ def create_app(
         file_id: str,
         _: None = Depends(require_api_key),
     ) -> DeleteResponse:
+        logger.info("LibreChat -> interface /files DELETE session_id=%s file_id=%s", session_id, file_id)
         service, gateway_client = _get_runtime_clients(ensure_session_service, ensure_gateway)
         try:
             session = await service.require_session(session_id)
@@ -510,6 +610,7 @@ def create_app(
         except Exception as exc:
             raise _daytona_error("resolve session", exc) from exc
         target_path = resolve_file_reference(file_id)
+        logger.info("Interface -> Daytona list_files session_id=%s sandbox_id=%s", session.session_id, session.sandbox_id)
         try:
             file_entries = _safe_list_workspace_files(gateway_client, session.sandbox_id)
             descriptors = _best_effort_file_descriptors(file_entries)
@@ -525,13 +626,32 @@ def create_app(
                 message=f"File '{target_path}' does not exist in session '{session_id}'.",
             )
 
+        logger.info(
+            "Interface -> Daytona delete_file session_id=%s sandbox_id=%s path=%s",
+            session.session_id,
+            session.sandbox_id,
+            target_path,
+        )
         try:
             gateway_client.delete_file(session.sandbox_id, target_path)
         except Exception as exc:
             raise _daytona_error("delete file", exc) from exc
+        logger.info(
+            "Daytona -> interface delete_file session_id=%s sandbox_id=%s path=%s",
+            session.session_id,
+            session.sandbox_id,
+            target_path,
+        )
 
         await service.touch(session.session_id)
-        return DeleteResponse(session_id=session.session_id, deleted=True, file=descriptor)
+        response = DeleteResponse(session_id=session.session_id, deleted=True, file=descriptor)
+        logger.info(
+            "Interface -> LibreChat /files DELETE session_id=%s deleted=%s path=%s",
+            response.session_id,
+            response.deleted,
+            response.file.path,
+        )
+        return response
 
     return app
 
