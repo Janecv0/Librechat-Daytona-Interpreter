@@ -20,9 +20,11 @@ from .errors import APIError, error_payload
 from .file_ids import (
     WORKSPACE_ROOT,
     encode_file_id,
+    get_workspace_root,
     normalize_workspace_path,
     resolve_file_reference,
     sanitize_upload_filename,
+    set_workspace_root,
 )
 from .lang import normalize_language
 from .models import (
@@ -289,7 +291,10 @@ def create_app(
     gateway: Any | None = None,
     enable_cleanup: bool = True,
 ) -> FastAPI:
+    global WORKSPACE_ROOT
     runtime_settings = settings or get_settings()
+    set_workspace_root(runtime_settings.WORKSPACE_ROOT)
+    WORKSPACE_ROOT = get_workspace_root()
     _configure_logging(runtime_settings.LOG_LEVEL)
     runtime_store = store or create_session_store(runtime_settings.REDIS_URL)
     runtime_gateway: Any | None = gateway

@@ -10,6 +10,23 @@ from .errors import APIError
 WORKSPACE_ROOT = "/workspace"
 
 
+def get_workspace_root() -> str:
+    return WORKSPACE_ROOT
+
+
+def set_workspace_root(root: str) -> None:
+    global WORKSPACE_ROOT
+    normalized = (root or "").strip().replace("\\", "/")
+    if not normalized:
+        normalized = "/workspace"
+    if not normalized.startswith("/"):
+        normalized = f"/{normalized}"
+    normalized = posixpath.normpath(normalized)
+    if normalized in {".", "/"}:
+        raise APIError(status_code=500, code="invalid_workspace_root", message="Invalid workspace root path.")
+    WORKSPACE_ROOT = normalized
+
+
 def sanitize_upload_filename(filename: str | None) -> str:
     normalized = (filename or "").replace("\\", "/")
     safe_name = PurePosixPath(normalized).name
@@ -34,7 +51,7 @@ def normalize_workspace_path(path: str) -> str:
         raise APIError(
             status_code=400,
             code="invalid_path",
-            message="Path traversal is not allowed. Paths must stay inside /workspace.",
+            message=f"Path traversal is not allowed. Paths must stay inside {WORKSPACE_ROOT}.",
         )
 
     return normalized
@@ -70,4 +87,3 @@ def resolve_file_reference(file_ref: str) -> str:
     except APIError:
         # Backward-compatible fallback for plain names/relative paths.
         return normalize_workspace_path(raw)
-

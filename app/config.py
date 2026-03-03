@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     ADAPTER_API_KEY: str
     DAYTONA_API_KEY: str
     DAYTONA_API_URL: str | None = None
+    WORKSPACE_ROOT: str = "/workspace"
     REDIS_URL: str | None = None
     SESSION_TTL_SECONDS: int = 6000
     CLEANUP_INTERVAL_SECONDS: int = 60

@@ -30,6 +30,7 @@ Copy `.env.example` to `.env` and set values:
 - `ADAPTER_API_KEY` (required)
 - `DAYTONA_API_KEY` (required)
 - `DAYTONA_API_URL` (optional)
+- `WORKSPACE_ROOT` (optional, default `/workspace`; set `/tmp/workspace` if `/workspace` is not writable)
 - `REDIS_URL` (optional)
 - `SESSION_TTL_SECONDS` (optional, default `1800`)
 - `UPLOAD_MAX_BYTES` (optional, default `20971520`)
