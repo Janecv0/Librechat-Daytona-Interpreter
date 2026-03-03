@@ -244,6 +244,20 @@ def _normalize_exec_code_paths(code: str) -> str:
     return code.replace("/mnt/data/", f"{WORKSPACE_ROOT}/").replace("/mnt/data", WORKSPACE_ROOT)
 
 
+def _wrap_exec_code_with_compat(code: str) -> str:
+    prelude = (
+        "import os\n"
+        f"os.makedirs('{WORKSPACE_ROOT}', exist_ok=True)\n"
+        "try:\n"
+        "    os.makedirs('/mnt', exist_ok=True)\n"
+        f"    if not os.path.exists('/mnt/data'):\n"
+        f"        os.symlink('{WORKSPACE_ROOT}', '/mnt/data')\n"
+        "except Exception:\n"
+        "    pass\n"
+    )
+    return f"{prelude}\n{code}"
+
+
 def _best_effort_file_descriptors(entries: list[Any]) -> list[FileDescriptor]:
     descriptors: list[FileDescriptor] = []
     for entry in entries:
@@ -400,8 +414,9 @@ def create_app(
                 session.session_id,
                 WORKSPACE_ROOT,
             )
+        wrapped_code_payload = _wrap_exec_code_with_compat(exec_code_payload)
         try:
-            run_payload = gateway_client.run_code(session.sandbox_id, language, exec_code_payload)
+            run_payload = gateway_client.run_code(session.sandbox_id, language, wrapped_code_payload)
         except APIError:
             raise
         except Exception as exc:
