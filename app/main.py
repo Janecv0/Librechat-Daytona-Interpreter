@@ -238,6 +238,12 @@ def _safe_list_workspace_files(gateway_client: Any, sandbox_id: str) -> list[Any
         raise
 
 
+def _normalize_exec_code_paths(code: str) -> str:
+    # LibreChat-generated code often uses /mnt/data (OpenAI CI convention).
+    # Daytona sandboxes in this adapter use /workspace.
+    return code.replace("/mnt/data/", f"{WORKSPACE_ROOT}/").replace("/mnt/data", WORKSPACE_ROOT)
+
+
 def _best_effort_file_descriptors(entries: list[Any]) -> list[FileDescriptor]:
     descriptors: list[FileDescriptor] = []
     for entry in entries:
@@ -387,8 +393,15 @@ def create_app(
             session.sandbox_id,
             language,
         )
+        exec_code_payload = _normalize_exec_code_paths(payload.code)
+        if exec_code_payload != payload.code:
+            logger.info(
+                "Normalized execution paths for session '%s' (/mnt/data -> %s).",
+                session.session_id,
+                WORKSPACE_ROOT,
+            )
         try:
-            run_payload = gateway_client.run_code(session.sandbox_id, language, payload.code)
+            run_payload = gateway_client.run_code(session.sandbox_id, language, exec_code_payload)
         except APIError:
             raise
         except Exception as exc:
@@ -407,7 +420,7 @@ def create_app(
             file_entries = _safe_list_workspace_files(gateway_client, session.sandbox_id)
         except Exception as exc:
             logger.warning(
-                "Non-fatal Daytona file listing error in /exec for session '%s': %s",
+                "Non-fatal Daytona file listing error in /exec for session '%s': %r",
                 session.session_id,
                 exc,
             )

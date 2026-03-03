@@ -360,6 +360,7 @@ class DaytonaGateway:
         ]
 
         raw_entries: Any = None
+        last_error: Exception | None = None
         for method_name, args, kwargs in attempts:
             method = getattr(fs, method_name, None)
             if not callable(method):
@@ -369,8 +370,13 @@ class DaytonaGateway:
                 break
             except TypeError:
                 continue
+            except Exception as exc:
+                last_error = exc
+                continue
 
         if raw_entries is None:
+            if last_error is not None:
+                raise RuntimeError(f"Unable to list files with available Daytona SDK methods: {last_error}") from last_error
             raise RuntimeError("Unable to list files with available Daytona SDK methods.")
 
         if isinstance(raw_entries, dict):
