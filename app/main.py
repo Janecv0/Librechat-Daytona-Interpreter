@@ -414,10 +414,16 @@ def create_app(
             file_entries = []
 
         file_descriptors = _best_effort_file_descriptors(file_entries)
+        normalized_run = _normalize_run_payload(run_payload)
         response = ExecResponse(
             session_id=session.session_id,
-            run=_normalize_run_payload(run_payload),
+            run=normalized_run,
             files=file_descriptors,
+            stdout=normalized_run.stdout,
+            stderr=normalized_run.stderr,
+            code=normalized_run.code,
+            status=normalized_run.status,
+            output=normalized_run.output,
         )
         logger.info(
             "Interface -> LibreChat /exec session_id=%s status=%s code=%s files=%s",

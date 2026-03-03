@@ -32,6 +32,11 @@ class ExecResponse(BaseModel):
     session_id: str
     run: RunResult
     files: list[FileDescriptor]
+    stdout: str | None = None
+    stderr: str | None = None
+    code: int | None = None
+    status: str | None = None
+    output: Any | None = None
 
 
 class FilesResponse(BaseModel):
@@ -56,4 +61,3 @@ class ErrorDetails(BaseModel):
 
 class ErrorResponse(BaseModel):
     error: ErrorDetails
-
