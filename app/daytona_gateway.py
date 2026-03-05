@@ -20,7 +20,14 @@ class FileEntry:
 
 
 class DaytonaGateway:
-    def __init__(self, api_key: str, api_url: str | None = None) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        api_url: str | None = None,
+        sandbox_cpu: int | None = 1,
+        sandbox_memory: int | None = 1,
+        sandbox_disk: int | None = 1,
+    ) -> None:
         daytona_module = None
         try:
             daytona_module = import_module("daytona_sdk")
@@ -41,6 +48,9 @@ class DaytonaGateway:
             config_kwargs["api_url"] = api_url
         config = config_cls(**config_kwargs)
         self._client = daytona_cls(config)
+        self._sandbox_cpu = sandbox_cpu
+        self._sandbox_memory = sandbox_memory
+        self._sandbox_disk = sandbox_disk
 
     @staticmethod
     def _field(value: Any, keys: tuple[str, ...]) -> Any:
@@ -66,6 +76,41 @@ class DaytonaGateway:
         if last_error is None:
             raise RuntimeError("No call variants were available.")
         raise last_error
+
+    def _build_resources_value(self) -> Any:
+        if self._sandbox_cpu is None and self._sandbox_memory is None and self._sandbox_disk is None:
+            return None
+
+        resource_payload = {
+            "cpu": self._sandbox_cpu,
+            "memory": self._sandbox_memory,
+            "disk": self._sandbox_disk,
+        }
+        compact_payload = {key: value for key, value in resource_payload.items() if value is not None}
+        if not compact_payload:
+            return None
+
+        for cls_name in ("Resources", "SandboxResources", "CreateSandboxResources"):
+            resources_cls = getattr(self._module, cls_name, None)
+            if resources_cls is None:
+                continue
+            for kwargs in (
+                compact_payload,
+                {
+                    "cpu_cores": compact_payload.get("cpu"),
+                    "memory_gb": compact_payload.get("memory"),
+                    "disk_gb": compact_payload.get("disk"),
+                },
+            ):
+                normalized_kwargs = {key: value for key, value in kwargs.items() if value is not None}
+                if not normalized_kwargs:
+                    continue
+                try:
+                    return resources_cls(**normalized_kwargs)
+                except (TypeError, ValueError):
+                    continue
+
+        return compact_payload
 
     @classmethod
     def _to_text(cls, value: Any) -> str | None:
@@ -125,6 +170,8 @@ class DaytonaGateway:
         if not callable(creator):
             raise RuntimeError("Daytona client does not expose sandbox creation.")
 
+        resources_value = self._build_resources_value()
+
         create_params_classes = [
             getattr(self._module, "CreateSandboxFromSnapshotParams", None),
             getattr(self._module, "CreateSandboxBaseParams", None),
@@ -135,16 +182,35 @@ class DaytonaGateway:
             if create_params_cls is None:
                 continue
             for kwargs in ({"language": language}, {"lang": language}):
-                try:
-                    variants.append(((create_params_cls(**kwargs),), {}))
-                except (TypeError, ValueError):
-                    continue
+                create_kwargs_candidates = [kwargs]
+                if resources_value is not None:
+                    create_kwargs_candidates = [
+                        {**kwargs, "resources": resources_value},
+                        {**kwargs, "resource": resources_value},
+                        kwargs,
+                    ]
+                for create_kwargs in create_kwargs_candidates:
+                    try:
+                        variants.append(((create_params_cls(**create_kwargs),), {}))
+                    except (TypeError, ValueError):
+                        continue
+
+        direct_variants: list[tuple[tuple[Any, ...], dict[str, Any]]] = [
+            ((), {"language": language}),
+            ((), {"lang": language}),
+            (({"language": language},), {}),
+        ]
+        if resources_value is not None:
+            direct_variants = [
+                ((), {"language": language, "resources": resources_value}),
+                ((), {"lang": language, "resources": resources_value}),
+                ((), {"language": language, "resource": resources_value}),
+                ((), {"lang": language, "resource": resources_value}),
+                (({"language": language, "resources": resources_value},), {}),
+                (({"lang": language, "resources": resources_value},), {}),
+            ] + direct_variants
         variants.extend(
-            [
-                ((), {"language": language}),
-                ((), {"lang": language}),
-                (({"language": language},), {}),
-            ]
+            direct_variants
         )
 
         sandbox = self._call_with_variants(creator, variants)

@@ -319,6 +319,9 @@ def create_app(
             runtime_gateway = DaytonaGateway(
                 api_key=runtime_settings.DAYTONA_API_KEY,
                 api_url=runtime_settings.DAYTONA_API_URL,
+                sandbox_cpu=runtime_settings.DAYTONA_SANDBOX_CPU,
+                sandbox_memory=runtime_settings.DAYTONA_SANDBOX_MEMORY,
+                sandbox_disk=runtime_settings.DAYTONA_SANDBOX_DISK,
             )
         return runtime_gateway
 
