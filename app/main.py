@@ -481,6 +481,7 @@ def create_app(
     @app.post(
         "/upload",
         response_model=FilesResponse,
+        response_model_exclude_none=True,
         responses={
             400: {"model": ErrorResponse},
             401: {"model": ErrorResponse},
@@ -566,16 +567,16 @@ def create_app(
 
         await service.touch(session.session_id)
         response = FilesResponse(
+            message="success",
             session_id=session.session_id,
-            sessionId=session.session_id,
             files=uploaded_descriptors,
-            file=uploaded_descriptors[0] if uploaded_descriptors else None,
         )
         logger.info(
             "Interface -> LibreChat /upload session_id=%s files=%s",
             response.session_id,
             len(response.files),
         )
+        logger.debug("Upload response payload keys=%s", list(response.model_dump().keys()))
         return response
 
     @app.get(
@@ -602,7 +603,6 @@ def create_app(
             raise _daytona_error("list files", exc) from exc
         response = FilesResponse(
             session_id=session.session_id,
-            sessionId=session.session_id,
             files=_best_effort_file_descriptors(file_entries),
         )
         logger.info("Daytona -> interface list_files session_id=%s count=%s", session.session_id, len(response.files))

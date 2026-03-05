@@ -44,10 +44,9 @@ class ExecResponse(BaseModel):
 
 
 class FilesResponse(BaseModel):
+    message: str | None = None
     session_id: str
-    sessionId: str | None = None
     files: list[FileDescriptor]
-    file: FileDescriptor | None = None
 
 
 class DeleteResponse(BaseModel):
