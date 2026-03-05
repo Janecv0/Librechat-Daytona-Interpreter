@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     DAYTONA_SANDBOX_DISK: int = 1
     WORKSPACE_ROOT: str = "/workspace"
     REDIS_URL: str | None = None
-    SESSION_TTL_SECONDS: int = 6000
+    SESSION_TTL_SECONDS: int = 300
     CLEANUP_INTERVAL_SECONDS: int = 60
     UPLOAD_MAX_BYTES: int = 20 * 1024 * 1024
     LOG_LEVEL: str = "INFO"
