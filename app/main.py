@@ -11,6 +11,7 @@ from typing import Annotated, Any
 from fastapi import Depends, FastAPI, Header, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
+from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from .auth import validate_api_key
 from .cleanup import SessionCleanupWorker
@@ -141,6 +142,10 @@ def _extract_session_id_from_files(files_payload: list[Any] | None) -> str | Non
             if isinstance(maybe_session_id, str) and maybe_session_id.strip():
                 return maybe_session_id.strip()
     return None
+
+
+def _is_upload_value(value: Any) -> bool:
+    return isinstance(value, (UploadFile, StarletteUploadFile))
 
 
 async def _read_upload_bytes(upload: UploadFile, max_bytes: int) -> bytes:
@@ -490,15 +495,17 @@ def create_app(
                 session_id = maybe_session_id.strip()
                 break
 
-        files: list[UploadFile] = []
+        files: list[UploadFile | StarletteUploadFile] = []
+        file_fields: list[str] = []
         for field_name, value in form_data.multi_items():
-            if isinstance(value, UploadFile):
+            if _is_upload_value(value):
                 files.append(value)
+                file_fields.append(field_name)
 
         logger.info(
             "LibreChat -> interface /upload session_id=%s file_fields=%s files=%s",
             session_id,
-            [field_name for field_name, value in form_data.multi_items() if isinstance(value, UploadFile)],
+            file_fields,
             [file.filename for file in files],
         )
         service, gateway_client = _get_runtime_clients(ensure_session_service, ensure_gateway)
