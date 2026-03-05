@@ -31,11 +31,19 @@ class FileDescriptor(BaseModel):
     filename: str | None = None
 
 
+class ExecArtifact(BaseModel):
+    session_id: str
+    sessionId: str | None = None
+    files: list[FileDescriptor]
+
+
 class ExecResponse(BaseModel):
     session_id: str
     sessionId: str | None = None
     run: RunResult
     files: list[FileDescriptor]
+    artifact: ExecArtifact | None = None
+    content: str | None = None
     stdout: str | None = None
     stderr: str | None = None
     code: int | None = None

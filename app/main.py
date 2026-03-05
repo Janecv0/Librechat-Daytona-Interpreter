@@ -31,6 +31,7 @@ from .lang import normalize_language
 from .models import (
     DeleteResponse,
     ErrorResponse,
+    ExecArtifact,
     ExecRequest,
     ExecResponse,
     FileDescriptor,
@@ -469,6 +470,12 @@ def create_app(
             sessionId=session.session_id,
             run=normalized_run,
             files=file_descriptors,
+            artifact=ExecArtifact(
+                session_id=session.session_id,
+                sessionId=session.session_id,
+                files=file_descriptors,
+            ),
+            content=normalized_run.stdout or normalized_run.stderr or _coerce_text(normalized_run.output),
             stdout=normalized_run.stdout,
             stderr=normalized_run.stderr,
             code=normalized_run.code,
