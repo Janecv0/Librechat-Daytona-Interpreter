@@ -8,7 +8,7 @@ from io import BytesIO
 from pathlib import PurePosixPath
 from typing import Annotated, Any
 
-from fastapi import Depends, FastAPI, File, Form, Header, UploadFile
+from fastapi import Depends, FastAPI, Header, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -357,6 +357,7 @@ def create_app(
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(_: Any, exc: RequestValidationError) -> JSONResponse:
+        logger.warning("Request validation error: %s", exc.errors())
         error_message = "Invalid request body."
         if exc.errors():
             first_error = exc.errors()[0]
@@ -470,16 +471,34 @@ def create_app(
     @app.post(
         "/upload",
         response_model=FilesResponse,
-        responses={401: {"model": ErrorResponse}, 413: {"model": ErrorResponse}, 502: {"model": ErrorResponse}},
+        responses={
+            400: {"model": ErrorResponse},
+            401: {"model": ErrorResponse},
+            413: {"model": ErrorResponse},
+            502: {"model": ErrorResponse},
+        },
     )
     async def upload_files(
+        request: Request,
         _: None = Depends(require_api_key),
-        session_id: Annotated[str | None, Form()] = None,
-        files: list[UploadFile] = File(...),
     ) -> FilesResponse:
+        form_data = await request.form()
+        session_id: str | None = None
+        for key in ("session_id", "sessionId"):
+            maybe_session_id = form_data.get(key)
+            if isinstance(maybe_session_id, str) and maybe_session_id.strip():
+                session_id = maybe_session_id.strip()
+                break
+
+        files: list[UploadFile] = []
+        for field_name, value in form_data.multi_items():
+            if isinstance(value, UploadFile):
+                files.append(value)
+
         logger.info(
-            "LibreChat -> interface /upload session_id=%s files=%s",
+            "LibreChat -> interface /upload session_id=%s file_fields=%s files=%s",
             session_id,
+            [field_name for field_name, value in form_data.multi_items() if isinstance(value, UploadFile)],
             [file.filename for file in files],
         )
         service, gateway_client = _get_runtime_clients(ensure_session_service, ensure_gateway)
