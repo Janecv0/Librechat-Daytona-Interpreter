@@ -290,6 +290,7 @@ def _get_runtime_clients(
     except APIError:
         raise
     except Exception as exc:
+        logger.exception("Failed to initialize runtime clients")
         raise _daytona_error("initialize Daytona client", exc) from exc
     return service, gateway_client
 
@@ -362,6 +363,8 @@ def create_app(
 
     @app.exception_handler(APIError)
     async def api_error_handler(_: Any, exc: APIError) -> JSONResponse:
+        if exc.status_code >= 500:
+            logger.warning("APIError %s %s: %s", exc.status_code, exc.code, exc.message)
         return JSONResponse(status_code=exc.status_code, content=error_payload(exc.code, exc.message))
 
     @app.exception_handler(RequestValidationError)
@@ -495,7 +498,7 @@ def create_app(
     ) -> FilesResponse:
         form_data = await request.form()
         session_id: str | None = None
-        for key in ("session_id", "sessionId"):
+        for key in ("session_id", "sessionId", "entity_id", "entityId"):
             maybe_session_id = form_data.get(key)
             if isinstance(maybe_session_id, str) and maybe_session_id.strip():
                 session_id = maybe_session_id.strip()
@@ -523,6 +526,11 @@ def create_app(
         except APIError:
             raise
         except Exception as exc:
+            logger.warning(
+                "Upload failed while creating/fetching session. session_id=%s error=%r",
+                session_id,
+                exc,
+            )
             raise _daytona_error("create or fetch session", exc) from exc
         uploaded_descriptors: list[FileDescriptor] = []
 
@@ -561,6 +569,13 @@ def create_app(
             except APIError:
                 raise
             except Exception as exc:
+                logger.warning(
+                    "Upload failed while sending file to Daytona. session_id=%s sandbox_id=%s filename=%s error=%r",
+                    session.session_id,
+                    session.sandbox_id,
+                    upload.filename,
+                    exc,
+                )
                 raise _daytona_error(f"upload file '{upload.filename}'", exc) from exc
             finally:
                 await upload.close()
