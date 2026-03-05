@@ -26,10 +26,14 @@ class FileDescriptor(BaseModel):
     name: str
     path: str
     size: int | None = None
+    file_id: str | None = None
+    fileId: str | None = None
+    filename: str | None = None
 
 
 class ExecResponse(BaseModel):
     session_id: str
+    sessionId: str | None = None
     run: RunResult
     files: list[FileDescriptor]
     stdout: str | None = None
@@ -41,11 +45,14 @@ class ExecResponse(BaseModel):
 
 class FilesResponse(BaseModel):
     session_id: str
+    sessionId: str | None = None
     files: list[FileDescriptor]
+    file: FileDescriptor | None = None
 
 
 class DeleteResponse(BaseModel):
     session_id: str
+    sessionId: str | None = None
     deleted: bool
     file: FileDescriptor
 

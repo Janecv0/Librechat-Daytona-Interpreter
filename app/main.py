@@ -91,11 +91,15 @@ def _to_file_descriptor(entry: Any) -> FileDescriptor:
     elif isinstance(size, str) and size.isdigit():
         parsed_size = int(size)
 
+    encoded_id = encode_file_id(normalized_path)
     return FileDescriptor(
-        id=encode_file_id(normalized_path),
+        id=encoded_id,
         name=resolved_name,
         path=normalized_path,
         size=parsed_size,
+        file_id=encoded_id,
+        fileId=encoded_id,
+        filename=resolved_name,
     )
 
 
@@ -456,6 +460,7 @@ def create_app(
         normalized_run = _normalize_run_payload(run_payload)
         response = ExecResponse(
             session_id=session.session_id,
+            sessionId=session.session_id,
             run=normalized_run,
             files=file_descriptors,
             stdout=normalized_run.stdout,
@@ -525,6 +530,7 @@ def create_app(
                 payload = await _read_upload_bytes(upload, runtime_settings.UPLOAD_MAX_BYTES)
                 safe_name = sanitize_upload_filename(upload.filename or "upload.bin")
                 destination_path = normalize_workspace_path(f"{WORKSPACE_ROOT}/{safe_name}")
+                encoded_id = encode_file_id(destination_path)
                 logger.info(
                     "Interface -> Daytona upload_file session_id=%s sandbox_id=%s path=%s size=%s",
                     session.session_id,
@@ -542,10 +548,13 @@ def create_app(
                 )
                 uploaded_descriptors.append(
                     FileDescriptor(
-                        id=encode_file_id(destination_path),
+                        id=encoded_id,
                         name=safe_name,
                         path=destination_path,
                         size=len(payload),
+                        file_id=encoded_id,
+                        fileId=encoded_id,
+                        filename=safe_name,
                     )
                 )
             except APIError:
@@ -556,7 +565,12 @@ def create_app(
                 await upload.close()
 
         await service.touch(session.session_id)
-        response = FilesResponse(session_id=session.session_id, files=uploaded_descriptors)
+        response = FilesResponse(
+            session_id=session.session_id,
+            sessionId=session.session_id,
+            files=uploaded_descriptors,
+            file=uploaded_descriptors[0] if uploaded_descriptors else None,
+        )
         logger.info(
             "Interface -> LibreChat /upload session_id=%s files=%s",
             response.session_id,
@@ -586,7 +600,11 @@ def create_app(
             file_entries = _safe_list_workspace_files(gateway_client, session.sandbox_id)
         except Exception as exc:
             raise _daytona_error("list files", exc) from exc
-        response = FilesResponse(session_id=session.session_id, files=_best_effort_file_descriptors(file_entries))
+        response = FilesResponse(
+            session_id=session.session_id,
+            sessionId=session.session_id,
+            files=_best_effort_file_descriptors(file_entries),
+        )
         logger.info("Daytona -> interface list_files session_id=%s count=%s", session.session_id, len(response.files))
         logger.info("Interface -> LibreChat /files session_id=%s count=%s", response.session_id, len(response.files))
         return response
@@ -709,7 +727,12 @@ def create_app(
         )
 
         await service.touch(session.session_id)
-        response = DeleteResponse(session_id=session.session_id, deleted=True, file=descriptor)
+        response = DeleteResponse(
+            session_id=session.session_id,
+            sessionId=session.session_id,
+            deleted=True,
+            file=descriptor,
+        )
         logger.info(
             "Interface -> LibreChat /files DELETE session_id=%s deleted=%s path=%s",
             response.session_id,
