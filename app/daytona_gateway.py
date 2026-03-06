@@ -5,6 +5,7 @@ import tempfile
 from dataclasses import dataclass
 from importlib import import_module
 from io import BytesIO
+import logging
 from pathlib import PurePosixPath
 import json
 from typing import Any
@@ -17,6 +18,9 @@ class FileEntry:
     path: str
     name: str
     size: int | None = None
+
+
+logger = logging.getLogger(__name__)
 
 
 class DaytonaGateway:
@@ -171,13 +175,22 @@ class DaytonaGateway:
             raise RuntimeError("Daytona client does not expose sandbox creation.")
 
         resources_value = self._build_resources_value()
+        resource_scalar_kwargs = {
+            "cpu": self._sandbox_cpu,
+            "memory": self._sandbox_memory,
+            "disk": self._sandbox_disk,
+        }
+        resource_scalar_kwargs = {
+            key: value for key, value in resource_scalar_kwargs.items() if value is not None
+        }
 
         create_params_classes = [
             getattr(self._module, "CreateSandboxFromSnapshotParams", None),
             getattr(self._module, "CreateSandboxBaseParams", None),
             getattr(self._module, "CreateSandboxParams", None),
         ]
-        variants: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+        resource_variants: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+        base_variants: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
         for create_params_cls in create_params_classes:
             if create_params_cls is None:
                 continue
@@ -187,33 +200,69 @@ class DaytonaGateway:
                     create_kwargs_candidates = [
                         {**kwargs, "resources": resources_value},
                         {**kwargs, "resource": resources_value},
+                        {**kwargs, **resource_scalar_kwargs},
                         kwargs,
                     ]
                 for create_kwargs in create_kwargs_candidates:
                     try:
-                        variants.append(((create_params_cls(**create_kwargs),), {}))
+                        variant = ((create_params_cls(**create_kwargs),), {})
+                        uses_resource = (
+                            "resources" in create_kwargs
+                            or "resource" in create_kwargs
+                            or any(key in create_kwargs for key in ("cpu", "memory", "disk"))
+                        )
+                        if uses_resource:
+                            resource_variants.append(variant)
+                        else:
+                            base_variants.append(variant)
                     except (TypeError, ValueError):
                         continue
 
-        direct_variants: list[tuple[tuple[Any, ...], dict[str, Any]]] = [
+        direct_base_variants: list[tuple[tuple[Any, ...], dict[str, Any]]] = [
             ((), {"language": language}),
             ((), {"lang": language}),
             (({"language": language},), {}),
         ]
-        if resources_value is not None:
-            direct_variants = [
-                ((), {"language": language, "resources": resources_value}),
-                ((), {"lang": language, "resources": resources_value}),
-                ((), {"language": language, "resource": resources_value}),
-                ((), {"lang": language, "resource": resources_value}),
-                (({"language": language, "resources": resources_value},), {}),
-                (({"lang": language, "resources": resources_value},), {}),
-            ] + direct_variants
-        variants.extend(
-            direct_variants
-        )
+        base_variants.extend(direct_base_variants)
 
-        sandbox = self._call_with_variants(creator, variants)
+        if resources_value is not None:
+            resource_variants.extend(
+                [
+                    ((), {"language": language, "resources": resources_value}),
+                    ((), {"lang": language, "resources": resources_value}),
+                    ((), {"language": language, "resource": resources_value}),
+                    ((), {"lang": language, "resource": resources_value}),
+                    (({"language": language, "resources": resources_value},), {}),
+                    (({"lang": language, "resources": resources_value},), {}),
+                ]
+            )
+            if resource_scalar_kwargs:
+                resource_variants.extend(
+                    [
+                        ((), {"language": language, **resource_scalar_kwargs}),
+                        ((), {"lang": language, **resource_scalar_kwargs}),
+                        (({"language": language, **resource_scalar_kwargs},), {}),
+                        (({"lang": language, **resource_scalar_kwargs},), {}),
+                    ]
+                )
+
+        sandbox: Any
+        if resource_variants:
+            try:
+                sandbox = self._call_with_variants(creator, resource_variants)
+            except Exception as resource_exc:
+                logger.warning(
+                    "Daytona rejected custom resources cpu=%s memory=%s disk=%s for language '%s'. Falling back to default create params. Error: %s",
+                    self._sandbox_cpu,
+                    self._sandbox_memory,
+                    self._sandbox_disk,
+                    language,
+                    resource_exc,
+                )
+                sandbox = self._call_with_variants(creator, base_variants)
+        else:
+            sandbox = self._call_with_variants(creator, base_variants)
+
         sandbox_id = self._field(sandbox, ("id", "sandbox_id", "sandboxId"))
         if sandbox_id is None:
             raise RuntimeError("Unable to resolve sandbox id from Daytona response.")
