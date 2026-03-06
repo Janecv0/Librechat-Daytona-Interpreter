@@ -21,6 +21,9 @@ class FileEntry:
 
 
 logger = logging.getLogger(__name__)
+DEFAULT_SANDBOX_CPU = 1
+DEFAULT_SANDBOX_MEMORY = 1
+DEFAULT_SANDBOX_DISK = 3
 
 
 class DaytonaGateway:
@@ -30,7 +33,7 @@ class DaytonaGateway:
         api_url: str | None = None,
         sandbox_cpu: int | None = 1,
         sandbox_memory: int | None = 1,
-        sandbox_disk: int | None = 1,
+        sandbox_disk: int | None = 3,
     ) -> None:
         daytona_module = None
         try:
@@ -116,6 +119,113 @@ class DaytonaGateway:
 
         return compact_payload
 
+    def _uses_default_resources(self) -> bool:
+        return (
+            self._sandbox_cpu == DEFAULT_SANDBOX_CPU
+            and self._sandbox_memory == DEFAULT_SANDBOX_MEMORY
+            and self._sandbox_disk == DEFAULT_SANDBOX_DISK
+        )
+
+    def _build_image_candidates(self, language: str) -> list[Any]:
+        candidates: list[Any] = []
+        image_cls = getattr(self._module, "Image", None)
+        if image_cls is not None:
+            # Attempt well-known constructors/members used across SDK versions.
+            method_names = (
+                "debian_slim",
+                "debianSlim",
+                "python",
+                "node",
+                "typescript",
+                "javascript",
+            )
+            for method_name in method_names:
+                value = getattr(image_cls, method_name, None)
+                if value is None:
+                    continue
+                if callable(value):
+                    for call_args in ((), (language,)):
+                        try:
+                            candidates.append(value(*call_args))
+                        except Exception:
+                            continue
+                else:
+                    candidates.append(value)
+
+            for kwargs in ({"language": language}, {"lang": language}, {"name": language}):
+                try:
+                    candidates.append(image_cls(**kwargs))
+                except Exception:
+                    continue
+
+        fallback_names = {
+            "python": ("python", "python:3.12"),
+            "javascript": ("javascript", "node"),
+            "typescript": ("typescript", "node"),
+        }
+        candidates.extend(fallback_names.get(language, (language,)))
+
+        unique: list[Any] = []
+        seen: set[str] = set()
+        for item in candidates:
+            key = repr(item)
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(item)
+        return unique
+
+    def _create_sandbox_with_image_params(
+        self,
+        creator: Any,
+        language: str,
+        resources_value: Any,
+        resource_scalar_kwargs: dict[str, Any],
+    ) -> Any:
+        image_params_cls = getattr(self._module, "CreateSandboxFromImageParams", None)
+        if image_params_cls is None:
+            raise RuntimeError("CreateSandboxFromImageParams is not available in this Daytona SDK version.")
+
+        variants: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+        image_candidates = self._build_image_candidates(language)
+        language_kwargs_options = [{"language": language}, {"lang": language}, {}]
+        resource_kwargs_options: list[dict[str, Any]] = []
+        if resources_value is not None:
+            resource_kwargs_options.extend([{"resources": resources_value}, {"resource": resources_value}])
+        if resource_scalar_kwargs:
+            resource_kwargs_options.append(resource_scalar_kwargs)
+        if not resource_kwargs_options:
+            raise RuntimeError("Custom sandbox resources are set but no supported resource payload could be built.")
+        image_kwargs_options: list[dict[str, Any]] = [{}, *({"image": image} for image in image_candidates)]
+
+        for language_kwargs in language_kwargs_options:
+            for resource_kwargs in resource_kwargs_options:
+                for image_kwargs in image_kwargs_options:
+                    kwargs = {**language_kwargs, **resource_kwargs, **image_kwargs}
+                    if not kwargs:
+                        continue
+                    try:
+                        params = image_params_cls(**kwargs)
+                        variants.append(((params,), {}))
+                    except Exception:
+                        continue
+                    variants.append(((), kwargs))
+
+        if not variants:
+            raise RuntimeError("No CreateSandboxFromImageParams variants with explicit resources could be constructed.")
+
+        last_error: Exception | None = None
+        for args, kwargs in variants:
+            try:
+                return creator(*args, **kwargs)
+            except Exception as exc:
+                last_error = exc
+                continue
+
+        if last_error is None:
+            raise RuntimeError("No image-based create variants were available.")
+        raise last_error
+
     @classmethod
     def _to_text(cls, value: Any) -> str | None:
         if value is None:
@@ -184,6 +294,25 @@ class DaytonaGateway:
             key: value for key, value in resource_scalar_kwargs.items() if value is not None
         }
 
+        if not self._uses_default_resources():
+            logger.info(
+                "Creating sandbox with custom resources via image params cpu=%s memory=%s disk=%s language=%s",
+                self._sandbox_cpu,
+                self._sandbox_memory,
+                self._sandbox_disk,
+                language,
+            )
+            sandbox = self._create_sandbox_with_image_params(
+                creator=creator,
+                language=language,
+                resources_value=resources_value,
+                resource_scalar_kwargs=resource_scalar_kwargs,
+            )
+            sandbox_id = self._field(sandbox, ("id", "sandbox_id", "sandboxId"))
+            if sandbox_id is None:
+                raise RuntimeError("Unable to resolve sandbox id from Daytona response.")
+            return str(sandbox_id)
+
         create_params_classes = [
             getattr(self._module, "CreateSandboxFromSnapshotParams", None),
             getattr(self._module, "CreateSandboxBaseParams", None),
@@ -248,18 +377,7 @@ class DaytonaGateway:
 
         sandbox: Any
         if resource_variants:
-            try:
-                sandbox = self._call_with_variants(creator, resource_variants)
-            except Exception as resource_exc:
-                logger.warning(
-                    "Daytona rejected custom resources cpu=%s memory=%s disk=%s for language '%s'. Falling back to default create params. Error: %s",
-                    self._sandbox_cpu,
-                    self._sandbox_memory,
-                    self._sandbox_disk,
-                    language,
-                    resource_exc,
-                )
-                sandbox = self._call_with_variants(creator, base_variants)
+            sandbox = self._call_with_variants(creator, resource_variants)
         else:
             sandbox = self._call_with_variants(creator, base_variants)
 

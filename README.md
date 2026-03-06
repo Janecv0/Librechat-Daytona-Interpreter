@@ -32,7 +32,7 @@ Copy `.env.example` to `.env` and set values:
 - `DAYTONA_API_URL` (optional)
 - `DAYTONA_SANDBOX_CPU` (optional, default `1`)
 - `DAYTONA_SANDBOX_MEMORY` (optional, default `1`)
-- `DAYTONA_SANDBOX_DISK` (optional, default `1`)
+- `DAYTONA_SANDBOX_DISK` (optional, default `3`)
 - `WORKSPACE_ROOT` (optional, default `/workspace`; set `/tmp/workspace` if `/workspace` is not writable)
 - `REDIS_URL` (optional)
 - `SESSION_TTL_SECONDS` (optional, default `1800`)

@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     DAYTONA_API_URL: str | None = None
     DAYTONA_SANDBOX_CPU: int = 1
     DAYTONA_SANDBOX_MEMORY: int = 1
-    DAYTONA_SANDBOX_DISK: int = 1
+    DAYTONA_SANDBOX_DISK: int = 3
     WORKSPACE_ROOT: str = "/workspace"
     REDIS_URL: str | None = None
     SESSION_TTL_SECONDS: int = 300
