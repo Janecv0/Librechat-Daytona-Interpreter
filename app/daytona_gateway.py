@@ -18,6 +18,7 @@ class FileEntry:
     path: str
     name: str
     size: int | None = None
+    last_modified: str | int | float | None = None
 
 
 logger = logging.getLogger(__name__)
@@ -629,6 +630,21 @@ class DaytonaGateway:
             path = self._field(item, ("path", "full_path", "fullPath", "location"))
             name = self._field(item, ("name", "filename"))
             size = self._field(item, ("size", "bytes"))
+            last_modified = self._field(
+                item,
+                (
+                    "lastModified",
+                    "last_modified",
+                    "modified",
+                    "modified_at",
+                    "updatedAt",
+                    "updated_at",
+                    "mtime",
+                    "mTime",
+                    "last_write_time",
+                    "lastWriteTime",
+                ),
+            )
             is_dir = bool(self._field(item, ("is_dir", "isDir", "directory")))
             item_type = self._field(item, ("type",))
             if isinstance(item_type, str) and item_type.lower() in {"dir", "directory"}:
@@ -648,7 +664,14 @@ class DaytonaGateway:
                 parsed_size = size
             elif isinstance(size, str) and size.isdigit():
                 parsed_size = int(size)
-            files.append(FileEntry(path=normalized_path, name=file_name, size=parsed_size))
+            files.append(
+                FileEntry(
+                    path=normalized_path,
+                    name=file_name,
+                    size=parsed_size,
+                    last_modified=last_modified,
+                )
+            )
 
         files.sort(key=lambda item: item.path)
         return files

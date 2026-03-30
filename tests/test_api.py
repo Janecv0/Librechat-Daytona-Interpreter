@@ -119,15 +119,27 @@ def test_upload_list_download_delete_flow() -> None:
     assert upload_response.status_code == 200
     upload_body = upload_response.json()
     session_id = upload_body["session_id"]
-    file_id = upload_body["files"][0]["id"]
-    file_path = upload_body["files"][0]["path"]
-    assert file_path == "/workspace/example.txt"
+    assert upload_body["message"] == "success"
+    assert upload_body["sessionId"] == session_id
+    uploaded_file = upload_body["files"][0]
+    file_id = uploaded_file["fileId"]
+    assert uploaded_file["filename"] == "example.txt"
+    assert uploaded_file["id"] == file_id
+    assert uploaded_file["file_id"] == file_id
+    assert set(uploaded_file.keys()) == {"fileId", "filename", "id", "file_id"}
 
     list_response = client.get(f"/files/{session_id}", headers=headers)
     assert list_response.status_code == 200
-    listed = list_response.json()["files"]
+    list_body = list_response.json()
+    assert list_body["session_id"] == session_id
+    assert list_body["sessionId"] == session_id
+    listed = list_body["files"]
     assert len(listed) == 1
     assert listed[0]["path"] == "/workspace/example.txt"
+    assert listed[0]["fileId"] == file_id
+    assert listed[0]["filename"] == "example.txt"
+    assert isinstance(listed[0]["lastModified"], str)
+    assert listed[0]["lastModified"].endswith("Z")
 
     download_response = client.get(f"/download/{session_id}/{file_id}", headers=headers)
     assert download_response.status_code == 200

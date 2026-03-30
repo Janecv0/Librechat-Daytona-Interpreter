@@ -4,6 +4,7 @@ import inspect
 import json
 import logging
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import PurePosixPath
 from typing import Annotated, Any
@@ -38,6 +39,8 @@ from .models import (
     FilesResponse,
     HealthResponse,
     RunResult,
+    UploadFileDescriptor,
+    UploadResponse,
 )
 from .session_service import SessionService
 from .session_store import SessionStore, create_session_store
@@ -78,6 +81,21 @@ def _to_file_descriptor(entry: Any) -> FileDescriptor:
     path = _get_field(entry, ("path", "full_path", "fullPath"))
     name = _get_field(entry, ("name", "filename"))
     size = _get_field(entry, ("size", "bytes"))
+    raw_last_modified = _get_field(
+        entry,
+        (
+            "lastModified",
+            "last_modified",
+            "modified",
+            "modified_at",
+            "updatedAt",
+            "updated_at",
+            "mtime",
+            "mTime",
+            "last_write_time",
+            "lastWriteTime",
+        ),
+    )
 
     if not path and name:
         path = f"{WORKSPACE_ROOT}/{name}"
@@ -93,15 +111,75 @@ def _to_file_descriptor(entry: Any) -> FileDescriptor:
         parsed_size = int(size)
 
     encoded_id = encode_file_id(normalized_path)
+    last_modified = _normalize_last_modified(raw_last_modified) or _utc_now_iso()
     return FileDescriptor(
-        id=encoded_id,
-        name=resolved_name,
-        path=normalized_path,
-        size=parsed_size,
-        file_id=encoded_id,
         fileId=encoded_id,
         filename=resolved_name,
+        path=normalized_path,
+        size=parsed_size,
+        lastModified=last_modified,
+        id=encoded_id,
+        file_id=encoded_id,
+        name=resolved_name,
     )
+
+
+def _utc_isoformat(value: datetime) -> str:
+    return value.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _utc_now_iso() -> str:
+    return _utc_isoformat(datetime.now(timezone.utc))
+
+
+def _normalize_last_modified(value: Any) -> str | None:
+    if value is None:
+        return None
+
+    if isinstance(value, datetime):
+        return _utc_isoformat(value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc))
+
+    if isinstance(value, (int, float)):
+        epoch = float(value)
+        if epoch > 10_000_000_000:
+            epoch = epoch / 1000.0
+        try:
+            return _utc_isoformat(datetime.fromtimestamp(epoch, tz=timezone.utc))
+        except (OverflowError, OSError, ValueError):
+            return None
+
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            return _normalize_last_modified(float(text))
+        except ValueError:
+            pass
+
+        normalized = text
+        if normalized.endswith("Z"):
+            normalized = f"{normalized[:-1]}+00:00"
+
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            return None
+
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return _utc_isoformat(parsed)
+
+    isoformat_fn = getattr(value, "isoformat", None)
+    if callable(isoformat_fn):
+        try:
+            iso_value = isoformat_fn()
+        except Exception:
+            return None
+        if isinstance(iso_value, str):
+            return _normalize_last_modified(iso_value)
+
+    return None
 
 
 def _normalize_run_payload(run_payload: Any) -> RunResult:
@@ -493,7 +571,7 @@ def create_app(
 
     @app.post(
         "/upload",
-        response_model=FilesResponse,
+        response_model=UploadResponse,
         response_model_exclude_none=True,
         responses={
             400: {"model": ErrorResponse},
@@ -505,7 +583,7 @@ def create_app(
     async def upload_files(
         request: Request,
         _: None = Depends(require_api_key),
-    ) -> FilesResponse:
+    ) -> UploadResponse:
         form_data = await request.form()
         session_id: str | None = None
         for key in ("session_id", "sessionId", "entity_id", "entityId"):
@@ -542,7 +620,7 @@ def create_app(
                 exc,
             )
             raise _daytona_error("create or fetch session", exc) from exc
-        uploaded_descriptors: list[FileDescriptor] = []
+        uploaded_descriptors: list[UploadFileDescriptor] = []
 
         for upload in files:
             try:
@@ -566,14 +644,11 @@ def create_app(
                     len(payload),
                 )
                 uploaded_descriptors.append(
-                    FileDescriptor(
-                        id=encoded_id,
-                        name=safe_name,
-                        path=destination_path,
-                        size=len(payload),
-                        file_id=encoded_id,
+                    UploadFileDescriptor(
                         fileId=encoded_id,
                         filename=safe_name,
+                        id=encoded_id,
+                        file_id=encoded_id,
                     )
                 )
             except APIError:
@@ -591,9 +666,10 @@ def create_app(
                 await upload.close()
 
         await service.touch(session.session_id)
-        response = FilesResponse(
+        response = UploadResponse(
             message="success",
             session_id=session.session_id,
+            sessionId=session.session_id,
             files=uploaded_descriptors,
         )
         logger.info(
@@ -607,6 +683,7 @@ def create_app(
     @app.get(
         "/files/{session_id}",
         response_model=FilesResponse,
+        response_model_exclude_none=True,
         responses={401: {"model": ErrorResponse}, 404: {"model": ErrorResponse}, 502: {"model": ErrorResponse}},
     )
     async def list_files(
@@ -628,6 +705,7 @@ def create_app(
             raise _daytona_error("list files", exc) from exc
         response = FilesResponse(
             session_id=session.session_id,
+            sessionId=session.session_id,
             files=_best_effort_file_descriptors(file_entries),
         )
         logger.info("Daytona -> interface list_files session_id=%s count=%s", session.session_id, len(response.files))

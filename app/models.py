@@ -22,13 +22,21 @@ class RunResult(BaseModel):
 
 
 class FileDescriptor(BaseModel):
-    id: str
-    name: str
+    fileId: str
+    filename: str
     path: str
     size: int | None = None
+    lastModified: str
+    id: str | None = None
     file_id: str | None = None
-    fileId: str | None = None
-    filename: str | None = None
+    name: str | None = None
+
+
+class UploadFileDescriptor(BaseModel):
+    fileId: str
+    filename: str
+    id: str | None = None
+    file_id: str | None = None
 
 
 class ExecArtifact(BaseModel):
@@ -52,9 +60,16 @@ class ExecResponse(BaseModel):
 
 
 class FilesResponse(BaseModel):
-    message: str | None = None
     session_id: str
+    sessionId: str | None = None
     files: list[FileDescriptor]
+
+
+class UploadResponse(BaseModel):
+    message: str
+    session_id: str
+    sessionId: str | None = None
+    files: list[UploadFileDescriptor]
 
 
 class DeleteResponse(BaseModel):
